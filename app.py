@@ -6,22 +6,23 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import json
 import gspread
+import requests as req_lib  # pour la session gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# --- Fonction pour se connecter à Google Sheet ---
+# --- Connexion Google Sheets ---
 def get_gsheet():
     creds_json = st.secrets["GOOGLE_CREDENTIALS_JSON"]
     creds_dict = json.loads(creds_json)
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.Client(auth=creds)
-    client.session = gspread.requests.Session()
+    client.session = req_lib.Session()  # CORRECTION ICI
     sheet_name = st.secrets["SHEET_NAME"]
     sheet = client.open(sheet_name).sheet1
     return sheet
 
-# --- Compteur ---
+# --- Gestion du compteur ---
 def reset_counter_if_new_day(sheet):
     today_str = datetime.now().strftime("%Y-%m-%d")
     last_date = sheet.acell('B1').value
@@ -72,10 +73,9 @@ def scrape_sites(keyword, num_results):
         st.progress(i / num_results)
     return results
 
-# --- Streamlit UI ---
+# --- Interface Streamlit ---
 st.title("🛠️ Extracteur d'emails - Recherche Google avec compteur")
 
-# Connexion Google Sheet
 sheet = get_gsheet()
 reset_counter_if_new_day(sheet)
 count = get_counter(sheet)
@@ -91,7 +91,6 @@ nb_sites = st.slider("Nombre de sites à scraper", min_value=1, max_value=50, va
 if st.button("Lancer la recherche"):
     with st.spinner('Recherche en cours...'):
         data = scrape_sites(keyword, nb_sites)
-        # Incrémenter compteur 1 fois par recherche lancée
         increment_counter(sheet)
 
     if data:
@@ -109,3 +108,4 @@ if st.button("Lancer la recherche"):
         )
     else:
         st.warning("Aucun email trouvé.")
+
