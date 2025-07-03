@@ -4,47 +4,42 @@ import requests
 import re
 from bs4 import BeautifulSoup
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# --- Connexion à Google Sheets via Streamlit Secrets ---
+# --- Fonction pour se connecter à Google Sheet ---
 def get_gsheet():
     creds_json = st.secrets["GOOGLE_CREDENTIALS_JSON"]
-    sheet_name = st.secrets["SHEET_NAME"]
-
     creds_dict = json.loads(creds_json)
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
+    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    client = gspread.Client(auth=creds)
+    client.session = gspread.requests.Session()
+    sheet_name = st.secrets["SHEET_NAME"]
     sheet = client.open(sheet_name).sheet1
     return sheet
 
-# --- Gestion compteur ---
-def read_counter(sheet):
-    today = datetime.now().strftime("%Y-%m-%d")
-    records = sheet.get_all_records()
+# --- Compteur ---
+def reset_counter_if_new_day(sheet):
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    last_date = sheet.acell('B1').value
+    if last_date != today_str:
+        sheet.update('A1', '0')
+        sheet.update('B1', today_str)
 
-    # Cherche la ligne du jour
-    for record in records:
-        if record.get("date") == today:
-            return int(record.get("count", 0))
-    # Si pas trouvé, créer une nouvelle ligne
-    sheet.append_row([today, 0])
-    return 0
+def get_counter(sheet):
+    val = sheet.acell('A1').value
+    return int(val) if val and val.isdigit() else 0
 
-def write_counter(sheet, count):
-    today = datetime.now().strftime("%Y-%m-%d")
-    records = sheet.get_all_records()
-    for i, record in enumerate(records, start=2):
-        if record.get("date") == today:
-            sheet.update_cell(i, 2, count)  # Colonne 2 = count
-            return
-    # Si pas trouvé, ajouter une nouvelle ligne
-    sheet.append_row([today, count])
+def increment_counter(sheet):
+    count = get_counter(sheet)
+    count += 1
+    sheet.update('A1', str(count))
+    return count
 
-# --- Extraction emails ---
+# --- Extraction d'emails ---
 def extract_emails(text):
     return re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
 
@@ -58,7 +53,7 @@ def filter_emails(emails):
 
 def scrape_sites(keyword, num_results):
     results = []
-    for url in search(keyword, num_results=num_results):
+    for i, url in enumerate(search(keyword, num_results=num_results), start=1):
         try:
             response = requests.get(url, timeout=7, headers={'User-Agent': 'Mozilla/5.0'})
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -74,46 +69,43 @@ def scrape_sites(keyword, num_results):
                 })
         except Exception:
             continue
+        st.progress(i / num_results)
     return results
 
-# --- Streamlit interface ---
-st.title("🛠️ Extracteur d'emails - Recherche Google")
+# --- Streamlit UI ---
+st.title("🛠️ Extracteur d'emails - Recherche Google avec compteur")
+
+# Connexion Google Sheet
+sheet = get_gsheet()
+reset_counter_if_new_day(sheet)
+count = get_counter(sheet)
+
+st.markdown(f"**Nombre de requêtes aujourd’hui : {count} / 100**")
+if count >= 100:
+    st.warning("⚠️ Limite de 100 requêtes atteinte, merci de patienter jusqu’à demain.")
+    st.stop()
 
 keyword = st.text_input("Métier + Ville", value="plombier Paris")
 nb_sites = st.slider("Nombre de sites à scraper", min_value=1, max_value=50, value=10)
 
-# Connexion à la feuille Google
-sheet = get_gsheet()
-
-# Lecture du compteur actuel
-counter = read_counter(sheet)
-st.info(f"🔢 Requêtes aujourd'hui : {counter} / 100 (limite recommandée)")
-
 if st.button("Lancer la recherche"):
-    if counter >= 100:
-        st.error("❌ Limite de 100 requêtes atteinte aujourd'hui, merci de réessayer demain.")
+    with st.spinner('Recherche en cours...'):
+        data = scrape_sites(keyword, nb_sites)
+        # Incrémenter compteur 1 fois par recherche lancée
+        increment_counter(sheet)
+
+    if data:
+        st.success(f"{len(data)} sites avec emails trouvés 👇")
+
+        df = pd.DataFrame(data)
+        st.dataframe(df)
+
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Télécharger les résultats en CSV",
+            data=csv,
+            file_name='emails.csv',
+            mime='text/csv'
+        )
     else:
-        with st.spinner('Recherche en cours...'):
-            data = scrape_sites(keyword, nb_sites)
-        if data:
-            st.success(f"{len(data)} sites avec emails trouvés 👇")
-
-            # Afficher le tableau
-            df = pd.DataFrame(data)
-            st.dataframe(df)
-
-            # Télécharger le CSV
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Télécharger les résultats en CSV",
-                data=csv,
-                file_name='emails.csv',
-                mime='text/csv'
-            )
-
-            # Mise à jour compteur
-            write_counter(sheet, counter + 1)
-
-        else:
-            st.warning("Aucun email trouvé.")
-
+        st.warning("Aucun email trouvé.")
