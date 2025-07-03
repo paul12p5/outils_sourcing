@@ -21,31 +21,17 @@ def get_gsheet():
     sheet = client.open(sheet_name).sheet1
     return sheet
 
-# --- Gestion compteur ---
+# --- Lire le compteur du jour depuis la cellule C1 ---
 def read_counter(sheet):
-    today = datetime.now().strftime("%Y-%m-%d")
-    records = sheet.get_all_records()
+    try:
+        return int(sheet.acell("C1").value)
+    except:
+        return 0
 
-    # Cherche la ligne du jour
-    for record in records:
-        if record.get("date") == today:
-            try:
-                return int(record.get("count", 0))
-            except:
-                return 0
-    # Si pas trouvé, créer une nouvelle ligne
-    sheet.append_row([today, 0])
-    return 0
-
-def write_counter(sheet, count):
+# --- Ajouter une ligne pour incrémenter le compteur ---
+def increment_counter(sheet):
     today = datetime.now().strftime("%Y-%m-%d")
-    records = sheet.get_all_records()
-    for i, record in enumerate(records, start=2):
-        if record.get("date") == today:
-            sheet.update_acell(f'B{i}', str(count))  # Colonne B = count
-            return
-    # Si pas trouvé, ajouter une nouvelle ligne
-    sheet.append_row([today, count])
+    sheet.append_row([today, 1])  # Col A = date, Col B = 1 requête
 
 # --- Extraction emails ---
 def extract_emails(text):
@@ -53,14 +39,14 @@ def extract_emails(text):
 
 def filter_emails(emails):
     blacklist = ['noreply', 'no-reply', 'donotreply', 'admin', 'support', 'contactform']
-    filtered = []
-    for e in emails:
-        if not any(b in e.lower() for b in blacklist):
-            filtered.append(e)
+    filtered = [e for e in emails if not any(b in e.lower() for b in blacklist)]
     return list(set(filtered))
 
+# --- Scraping avec barre de progression ---
 def scrape_sites(keyword, num_results):
     results = []
+    progress_bar = st.progress(0)
+
     for i, url in enumerate(search(keyword, num_results=num_results), start=1):
         try:
             response = requests.get(url, timeout=7, headers={'User-Agent': 'Mozilla/5.0'})
@@ -75,9 +61,10 @@ def scrape_sites(keyword, num_results):
                     'Nom': title,
                     'Emails': ', '.join(emails)
                 })
-            st.progress(i / num_results)  # barre de progression
         except Exception:
             continue
+        progress_bar.progress(i / num_results)
+
     return results
 
 # --- Streamlit interface ---
@@ -89,7 +76,7 @@ nb_sites = st.slider("Nombre de sites à scraper", min_value=1, max_value=50, va
 # Connexion à la feuille Google
 sheet = get_gsheet()
 
-# Lecture du compteur actuel
+# Lecture du compteur dans C1
 counter = read_counter(sheet)
 st.info(f"🔢 Requêtes aujourd'hui : {counter} / 100 (limite recommandée)")
 
@@ -99,10 +86,9 @@ if st.button("Lancer la recherche"):
     else:
         with st.spinner('Recherche en cours...'):
             data = scrape_sites(keyword, nb_sites)
+
         if data:
             st.success(f"{len(data)} sites avec emails trouvés 👇")
-
-            # Afficher le tableau
             df = pd.DataFrame(data)
             st.dataframe(df)
 
@@ -115,9 +101,8 @@ if st.button("Lancer la recherche"):
                 mime='text/csv'
             )
 
-            # Mise à jour compteur
-            write_counter(sheet, counter + 1)
-
+            # Incrémenter le compteur
+            increment_counter(sheet)
         else:
             st.warning("Aucun email trouvé.")
 
