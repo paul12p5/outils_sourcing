@@ -17,7 +17,7 @@ def filter_emails(emails):
 
 def scrape_sites(keyword, num_results):
     results = []
-    for url in search(keyword, num=num_results, stop=num_results, pause=2):
+    for url in search(keyword, num_results=num_results):
         try:
             response = requests.get(url, timeout=7, headers={'User-Agent': 'Mozilla/5.0'})
             soup = BeautifulSoup(response.text, 'html.parser')
