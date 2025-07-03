@@ -3,6 +3,7 @@ from googlesearch import search
 import requests
 import re
 from bs4 import BeautifulSoup
+import pandas as pd
 
 def extract_emails(text):
     return re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
@@ -27,9 +28,9 @@ def scrape_sites(keyword, num_results):
             title = soup.title.string.strip() if soup.title else url
             if emails:
                 results.append({
-                    'site': url,
-                    'title': title,
-                    'emails': emails
+                    'Site': url,
+                    'Nom': title,
+                    'Emails': ', '.join(emails)
                 })
         except Exception:
             continue
@@ -46,9 +47,21 @@ if st.button("Lancer la recherche"):
         data = scrape_sites(keyword, nb_sites)
 
     if data:
-        st.success(f"{len(data)} sites avec emails trouvés :")
-        for item in data:
-            st.markdown(f"**[{item['title']}]({item['site']})**")
-            st.write(", ".join(item['emails']))
+        st.success(f"{len(data)} sites avec emails trouvés 👇")
+
+        # Afficher le tableau
+        df = pd.DataFrame(data)
+        st.dataframe(df)
+
+        # Télécharger le CSV
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Télécharger les résultats en CSV",
+            data=csv,
+            file_name='emails.csv',
+            mime='text/csv'
+        )
+
     else:
         st.warning("Aucun email trouvé.")
+
