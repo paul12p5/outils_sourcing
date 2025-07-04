@@ -76,8 +76,12 @@ nb_sites = st.slider("Nombre de sites à scraper", min_value=1, max_value=50, va
 # Connexion à la feuille Google
 sheet = get_gsheet()
 
-# Lecture du compteur dans C1
-counter = read_counter(sheet)
+# Lecture du compteur depuis la cellule C1
+try:
+    counter = int(sheet.acell("C1").value)
+except:
+    counter = 0
+
 st.info(f"🔢 Requêtes aujourd'hui : {counter} / 100 (limite recommandée)")
 
 if st.button("Lancer la recherche"):
