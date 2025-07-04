@@ -28,10 +28,10 @@ def read_counter(sheet):
     except:
         return 0
 
-# --- Ajouter une ligne pour incrémenter le compteur ---
-def increment_counter(sheet):
+# --- Ajouter une ligne avec le nombre de requêtes ---
+def increment_counter(sheet, nb):
     today = datetime.now().strftime("%Y-%m-%d")
-    sheet.append_row([today, 1])  # Col A = date, Col B = 1 requête
+    sheet.append_row([today, nb])  # Col A = date, Col B = nb requêtes
 
 # --- Extraction emails ---
 def extract_emails(text):
@@ -77,16 +77,13 @@ nb_sites = st.slider("Nombre de sites à scraper", min_value=1, max_value=50, va
 sheet = get_gsheet()
 
 # Lecture du compteur depuis la cellule C1
-try:
-    counter = int(sheet.acell("C1").value)
-except:
-    counter = 0
+counter = read_counter(sheet)
 
 st.info(f"🔢 Requêtes aujourd'hui : {counter} / 100 (limite recommandée)")
 
 if st.button("Lancer la recherche"):
-    if counter >= 100:
-        st.error("❌ Limite de 100 requêtes atteinte aujourd'hui, merci de réessayer demain.")
+    if counter + nb_sites > 100:
+        st.error("❌ Lancer cette recherche dépasserait la limite de 100 requêtes aujourd'hui.")
     else:
         with st.spinner('Recherche en cours...'):
             data = scrape_sites(keyword, nb_sites)
@@ -105,8 +102,9 @@ if st.button("Lancer la recherche"):
                 mime='text/csv'
             )
 
-            # Incrémenter le compteur
-            increment_counter(sheet)
+            # Incrémenter le compteur avec le nombre de sites analysés
+            increment_counter(sheet, nb_sites)
         else:
             st.warning("Aucun email trouvé.")
+
 
