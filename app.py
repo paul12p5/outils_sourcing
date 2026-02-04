@@ -11,6 +11,7 @@ from duckduckgo_search import DDGS
 import gspread
 from google.oauth2.service_account import Credentials
 
+
 # ---------------------------
 # Google Sheets
 # ---------------------------
@@ -46,25 +47,81 @@ def increment_counter(sheet, nb):
 # Email extraction
 # ---------------------------
 def extract_emails(text):
-    return re.findall(
+    patterns = [
         r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-        text
-    )
+        r"[a-zA-Z0-9_.+-]+\s*\[at\]\s*[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        r"[a-zA-Z0-9_.+-]+\s*\(at\)\s*[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+    ]
 
+    emails = set()
+    for p in patterns:
+        for e in re.findall(p, text, re.IGNORECASE):
+            e = (
+                e.replace("[at]", "@")
+                .replace("(at)", "@")
+                .replace(" ", "")
+                .lower()
+            )
+            emails.add(e)
 
-def filter_emails(emails):
     blacklist = [
         "noreply", "no-reply", "donotreply",
         "admin", "support", "contactform"
     ]
-    return list({
+
+    return [
         e for e in emails
-        if not any(b in e.lower() for b in blacklist)
-    })
+        if not any(b in e for b in blacklist)
+    ]
 
 
 # ---------------------------
-# Scraping
+# Pages candidates
+# ---------------------------
+def get_candidate_urls(base_url):
+    base = base_url.rstrip("/")
+    paths = [
+        "",
+        "/contact",
+        "/contactez-nous",
+        "/mentions-legales",
+        "/legal",
+        "/impressum"
+    ]
+    return [base + p for p in paths]
+
+
+# ---------------------------
+# Scrape ONE site (multi-pages)
+# ---------------------------
+def scrape_site(url):
+    emails_found = set()
+    title = url
+
+    for page in get_candidate_urls(url):
+        try:
+            r = requests.get(
+                page,
+                timeout=8,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            soup = BeautifulSoup(r.text, "html.parser")
+            text = soup.get_text(" ")
+
+            emails = extract_emails(text)
+            emails_found.update(emails)
+
+            if soup.title and title == url:
+                title = soup.title.string.strip()
+
+        except Exception as e:
+            st.write("Erreur page :", page, e)
+
+    return title, list(emails_found)
+
+
+# ---------------------------
+# Scraping principal
 # ---------------------------
 def scrape_sites(keyword, num_results):
     results = []
@@ -84,32 +141,20 @@ def scrape_sites(keyword, num_results):
         if not url:
             continue
 
-        try:
-            response = requests.get(
-                url,
-                timeout=8,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                    )
-                }
-            )
+        if any(x in url for x in [
+            "pagesjaunes", "yelp", "facebook",
+            "linkedin", "instagram", "twitter"
+        ]):
+            continue
 
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = soup.get_text(separator=" ")
+        title, emails = scrape_site(url)
 
-            emails = filter_emails(extract_emails(text))
-            title = soup.title.string.strip() if soup.title else url
-
-            if emails:
-                results.append({
-                    "Site": url,
-                    "Nom": title,
-                    "Emails": ", ".join(emails)
-                })
-
-        except Exception as e:
-            st.write("Erreur sur :", url, e)
+        if emails:
+            results.append({
+                "Site": url,
+                "Nom": title,
+                "Emails": ", ".join(emails)
+            })
 
         progress.progress(i / num_results)
 
@@ -153,3 +198,4 @@ if st.button("Lancer la recherche"):
             increment_counter(sheet, nb_sites)
         else:
             st.warning("Aucun email trouvé.")
+
