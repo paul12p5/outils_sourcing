@@ -12,9 +12,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-# ---------------------------
+# ===========================
 # Google Sheets
-# ---------------------------
+# ===========================
 def get_gsheet():
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS_JSON"])
     sheet_name = st.secrets["SHEET_NAME"]
@@ -43,58 +43,50 @@ def increment_counter(sheet, nb):
     sheet.append_row([today, nb])
 
 
-# ---------------------------
+# ===========================
 # Email extraction
-# ---------------------------
+# ===========================
 def extract_emails(soup):
     emails = set()
 
-    # Emails dans le texte
+    # texte
     text = soup.get_text(" ")
-    emails.update(
-        re.findall(
-            r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-            text
-        )
-    )
+    for e in re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text):
+        emails.add(e.lower())
 
-    # Emails dans mailto:
+    # mailto
     for a in soup.select("a[href^=mailto]"):
         href = a.get("href", "")
         email = href.replace("mailto:", "").split("?")[0]
         if "@" in email:
-            emails.add(email)
+            emails.add(email.lower())
 
     blacklist = [
         "noreply", "no-reply", "donotreply",
         "admin", "support", "contactform"
     ]
 
-    return [
-        e.lower() for e in emails
-        if not any(b in e.lower() for b in blacklist)
-    ]
+    return [e for e in emails if not any(b in e for b in blacklist)]
 
 
-# ---------------------------
-# Pages candidates par site
-# ---------------------------
+# ===========================
+# URLs candidates
+# ===========================
 def get_candidate_urls(base_url):
     base = base_url.rstrip("/")
-    paths = [
-        "",
-        "/contact",
-        "/contactez-nous",
-        "/mentions-legales",
-        "/legal",
-        "/impressum"
+    return [
+        base,
+        base + "/contact",
+        base + "/contactez-nous",
+        base + "/mentions-legales",
+        base + "/legal",
+        base + "/impressum"
     ]
-    return [base + p for p in paths]
 
 
-# ---------------------------
-# Scrape un site (multi-pages)
-# ---------------------------
+# ===========================
+# Scrape 1 site
+# ===========================
 def scrape_site(url):
     emails_found = set()
     title = url
@@ -107,7 +99,7 @@ def scrape_site(url):
                 headers={"User-Agent": "Mozilla/5.0"}
             )
 
-            if r.status_code != 200:
+            if r.status_code != 200 or not r.text:
                 continue
 
             soup = BeautifulSoup(r.text, "html.parser")
@@ -116,36 +108,42 @@ def scrape_site(url):
             if soup.title and title == url:
                 title = soup.title.string.strip()
 
-        except Exception as e:
-            st.write("Erreur page :", page, e)
+        except:
+            pass
 
     return title, list(emails_found)
 
 
-# ---------------------------
+# ===========================
 # Scraping principal
-# ---------------------------
+# ===========================
 def scrape_sites(keyword, num_results):
     results = []
     progress = st.progress(0)
 
-    # 🔑 SOURCE URLS FIABLE
+    # 🔑 récupération robuste des URLs
     with DDGS() as ddgs:
-        raw_results = list(ddgs.text(keyword, max_results=num_results))
+        raw = list(ddgs.text(keyword, max_results=num_results * 2))
 
-    search_results = [r for r in raw_results if "href" in r]
+    urls = []
+    for r in raw:
+        href = r.get("href") or r.get("url")
+        if href and href.startswith("http"):
+            urls.append(href)
 
-    if not search_results:
+    urls = list(dict.fromkeys(urls))[:num_results]
+
+    if not urls:
         st.error("Aucune URL récupérée depuis DuckDuckGo.")
         return []
 
-    for i, r in enumerate(search_results, start=1):
-        url = r["href"]
+    for i, url in enumerate(urls, start=1):
 
         if any(x in url for x in [
             "pagesjaunes", "yelp", "facebook",
             "linkedin", "instagram", "twitter"
         ]):
+            progress.progress(i / num_results)
             continue
 
         title, emails = scrape_site(url)
@@ -162,9 +160,9 @@ def scrape_sites(keyword, num_results):
     return results
 
 
-# ---------------------------
+# ===========================
 # Streamlit UI
-# ---------------------------
+# ===========================
 st.set_page_config(page_title="Extracteur Emails", layout="wide")
 st.title("🛠️ Extracteur d'emails – Recherche Web")
 
