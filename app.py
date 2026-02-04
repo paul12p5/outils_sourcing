@@ -11,6 +11,7 @@ from duckduckgo_search import DDGS
 import gspread
 from google.oauth2.service_account import Credentials
 
+
 # ---------------------------
 # Google Sheets
 # ---------------------------
@@ -48,26 +49,31 @@ def increment_counter(sheet, nb):
 def extract_emails(soup):
     emails = set()
 
-    # 1️⃣ Emails dans le texte
+    # Emails dans le texte
     text = soup.get_text(" ")
-    text_emails = re.findall(
-        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text
+    emails.update(
+        re.findall(
+            r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+            text
+        )
     )
-    emails.update(text_emails)
 
-    # 2️⃣ Emails dans mailto
+    # Emails dans mailto:
     for a in soup.select("a[href^=mailto]"):
         href = a.get("href", "")
         email = href.replace("mailto:", "").split("?")[0]
         if "@" in email:
             emails.add(email)
 
-    # 3️⃣ Nettoyage blacklist
     blacklist = [
         "noreply", "no-reply", "donotreply",
         "admin", "support", "contactform"
     ]
-    return [e.lower() for e in emails if not any(b in e.lower() for b in blacklist)]
+
+    return [
+        e.lower() for e in emails
+        if not any(b in e.lower() for b in blacklist)
+    ]
 
 
 # ---------------------------
@@ -100,10 +106,12 @@ def scrape_site(url):
                 timeout=8,
                 headers={"User-Agent": "Mozilla/5.0"}
             )
-            soup = BeautifulSoup(r.text, "html.parser")
 
-            emails = extract_emails(soup)
-            emails_found.update(emails)
+            if r.status_code != 200:
+                continue
+
+            soup = BeautifulSoup(r.text, "html.parser")
+            emails_found.update(extract_emails(soup))
 
             if soup.title and title == url:
                 title = soup.title.string.strip()
@@ -121,20 +129,19 @@ def scrape_sites(keyword, num_results):
     results = []
     progress = st.progress(0)
 
-    # ---- RECUPERE LES VRAIES URLS ----
+    # 🔑 SOURCE URLS FIABLE
     with DDGS() as ddgs:
-        search_results = list(ddgs.links(keyword, max_results=num_results))
+        raw_results = list(ddgs.text(keyword, max_results=num_results))
+
+    search_results = [r for r in raw_results if "href" in r]
 
     if not search_results:
-        st.error("Aucun résultat DuckDuckGo.")
+        st.error("Aucune URL récupérée depuis DuckDuckGo.")
         return []
 
     for i, r in enumerate(search_results, start=1):
-        url = r.get("url")
-        if not url:
-            continue
+        url = r["href"]
 
-        # Filtrer annuaires et réseaux sociaux
         if any(x in url for x in [
             "pagesjaunes", "yelp", "facebook",
             "linkedin", "instagram", "twitter"
