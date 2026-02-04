@@ -11,7 +11,6 @@ from duckduckgo_search import DDGS
 import gspread
 from google.oauth2.service_account import Credentials
 
-
 # ---------------------------
 # Google Sheets
 # ---------------------------
@@ -46,37 +45,33 @@ def increment_counter(sheet, nb):
 # ---------------------------
 # Email extraction
 # ---------------------------
-def extract_emails(text):
-    patterns = [
-        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-        r"[a-zA-Z0-9_.+-]+\s*\[at\]\s*[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-        r"[a-zA-Z0-9_.+-]+\s*\(at\)\s*[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-    ]
-
+def extract_emails(soup):
     emails = set()
-    for p in patterns:
-        for e in re.findall(p, text, re.IGNORECASE):
-            e = (
-                e.replace("[at]", "@")
-                .replace("(at)", "@")
-                .replace(" ", "")
-                .lower()
-            )
-            emails.add(e)
 
+    # 1️⃣ Emails dans le texte
+    text = soup.get_text(" ")
+    text_emails = re.findall(
+        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text
+    )
+    emails.update(text_emails)
+
+    # 2️⃣ Emails dans mailto
+    for a in soup.select("a[href^=mailto]"):
+        href = a.get("href", "")
+        email = href.replace("mailto:", "").split("?")[0]
+        if "@" in email:
+            emails.add(email)
+
+    # 3️⃣ Nettoyage blacklist
     blacklist = [
         "noreply", "no-reply", "donotreply",
         "admin", "support", "contactform"
     ]
-
-    return [
-        e for e in emails
-        if not any(b in e for b in blacklist)
-    ]
+    return [e.lower() for e in emails if not any(b in e.lower() for b in blacklist)]
 
 
 # ---------------------------
-# Pages candidates
+# Pages candidates par site
 # ---------------------------
 def get_candidate_urls(base_url):
     base = base_url.rstrip("/")
@@ -92,7 +87,7 @@ def get_candidate_urls(base_url):
 
 
 # ---------------------------
-# Scrape ONE site (multi-pages)
+# Scrape un site (multi-pages)
 # ---------------------------
 def scrape_site(url):
     emails_found = set()
@@ -106,9 +101,8 @@ def scrape_site(url):
                 headers={"User-Agent": "Mozilla/5.0"}
             )
             soup = BeautifulSoup(r.text, "html.parser")
-            text = soup.get_text(" ")
 
-            emails = extract_emails(text)
+            emails = extract_emails(soup)
             emails_found.update(emails)
 
             if soup.title and title == url:
@@ -127,20 +121,20 @@ def scrape_sites(keyword, num_results):
     results = []
     progress = st.progress(0)
 
+    # ---- RECUPERE LES VRAIES URLS ----
     with DDGS() as ddgs:
-        search_results = list(
-            ddgs.text(keyword, max_results=num_results)
-        )
+        search_results = list(ddgs.links(keyword, max_results=num_results))
 
     if not search_results:
         st.error("Aucun résultat DuckDuckGo.")
         return []
 
     for i, r in enumerate(search_results, start=1):
-        url = r.get("href")
+        url = r.get("url")
         if not url:
             continue
 
+        # Filtrer annuaires et réseaux sociaux
         if any(x in url for x in [
             "pagesjaunes", "yelp", "facebook",
             "linkedin", "instagram", "twitter"
@@ -198,4 +192,3 @@ if st.button("Lancer la recherche"):
             increment_counter(sheet, nb_sites)
         else:
             st.warning("Aucun email trouvé.")
-
