@@ -1,110 +1,155 @@
 import streamlit as st
-from googlesearch import search
 import requests
 import re
-from bs4 import BeautifulSoup
-import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
-from datetime import datetime
+import pandas as pd
 
-# --- Connexion à Google Sheets via Streamlit Secrets ---
+from bs4 import BeautifulSoup
+from datetime import datetime
+from duckduckgo_search import DDGS
+
+import gspread
+from google.oauth2.service_account import Credentials
+
+# ---------------------------
+# Google Sheets
+# ---------------------------
 def get_gsheet():
-    creds_json = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS_JSON"])
     sheet_name = st.secrets["SHEET_NAME"]
 
-    creds_dict = json.loads(creds_json)
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open(sheet_name).sheet1
-    return sheet
+    creds = Credentials.from_service_account_info(
+        creds_dict,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
 
-# --- Lire le compteur du jour depuis la cellule C1 ---
+    client = gspread.authorize(creds)
+    return client.open(sheet_name).sheet1
+
+
 def read_counter(sheet):
     try:
         return int(sheet.acell("C1").value)
     except:
         return 0
 
-# --- Ajouter une ligne avec le nombre de requêtes ---
+
 def increment_counter(sheet, nb):
     today = datetime.now().strftime("%Y-%m-%d")
-    sheet.append_row([today, nb])  # Col A = date, Col B = nb requêtes
+    sheet.append_row([today, nb])
 
-# --- Extraction emails ---
+
+# ---------------------------
+# Email extraction
+# ---------------------------
 def extract_emails(text):
-    return re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
+    return re.findall(
+        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        text
+    )
+
 
 def filter_emails(emails):
-    blacklist = ['noreply', 'no-reply', 'donotreply', 'admin', 'support', 'contactform']
-    filtered = [e for e in emails if not any(b in e.lower() for b in blacklist)]
-    return list(set(filtered))
+    blacklist = [
+        "noreply", "no-reply", "donotreply",
+        "admin", "support", "contactform"
+    ]
+    return list({
+        e for e in emails
+        if not any(b in e.lower() for b in blacklist)
+    })
 
-# --- Scraping avec barre de progression ---
+
+# ---------------------------
+# Scraping
+# ---------------------------
 def scrape_sites(keyword, num_results):
     results = []
-    progress_bar = st.progress(0)
+    progress = st.progress(0)
 
-    for i, url in enumerate(search(keyword, num_results=num_results), start=1):
+    with DDGS() as ddgs:
+        search_results = list(
+            ddgs.text(keyword, max_results=num_results)
+        )
+
+    if not search_results:
+        st.error("Aucun résultat DuckDuckGo.")
+        return []
+
+    for i, r in enumerate(search_results, start=1):
+        url = r.get("href")
+        if not url:
+            continue
+
         try:
-            response = requests.get(url, timeout=7, headers={'User-Agent': 'Mozilla/5.0'})
-            soup = BeautifulSoup(response.text, 'html.parser')
-            text = soup.get_text()
-            emails_raw = extract_emails(text)
-            emails = filter_emails(emails_raw)
+            response = requests.get(
+                url,
+                timeout=8,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                    )
+                }
+            )
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            text = soup.get_text(separator=" ")
+
+            emails = filter_emails(extract_emails(text))
             title = soup.title.string.strip() if soup.title else url
+
             if emails:
                 results.append({
-                    'Site': url,
-                    'Nom': title,
-                    'Emails': ', '.join(emails)
+                    "Site": url,
+                    "Nom": title,
+                    "Emails": ", ".join(emails)
                 })
-        except Exception:
-            continue
-        progress_bar.progress(i / num_results)
+
+        except Exception as e:
+            st.write("Erreur sur :", url, e)
+
+        progress.progress(i / num_results)
 
     return results
 
-# --- Streamlit interface ---
-st.title("🛠️ Extracteur d'emails - Recherche Google")
 
-keyword = st.text_input("Métier + Ville", value="plombier Paris")
-nb_sites = st.slider("Nombre de sites à scraper", min_value=1, max_value=50, value=10)
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.set_page_config(page_title="Extracteur Emails", layout="wide")
+st.title("🛠️ Extracteur d'emails – Recherche Web")
 
-# Connexion à la feuille Google
+keyword = st.text_input("Métier + Ville", "plombier Paris")
+nb_sites = st.slider("Nombre de sites à analyser", 1, 50, 10)
+
 sheet = get_gsheet()
-
-# Lecture du compteur depuis la cellule C1
 counter = read_counter(sheet)
 
-st.info(f"🔢 Requêtes aujourd'hui : {counter} / 100 (limite recommandée)")
+st.info(f"🔢 Requêtes aujourd'hui : {counter} / 100")
 
 if st.button("Lancer la recherche"):
     if counter + nb_sites > 100:
-        st.error("❌ Lancer cette recherche dépasserait la limite de 100 requêtes aujourd'hui.")
+        st.error("❌ Limite journalière dépassée.")
     else:
-        with st.spinner('Recherche en cours...'):
+        with st.spinner("Scraping en cours..."):
             data = scrape_sites(keyword, nb_sites)
 
         if data:
-            st.success(f"{len(data)} sites avec emails trouvés 👇")
             df = pd.DataFrame(data)
-            st.dataframe(df)
+            st.success(f"{len(df)} sites avec emails trouvés")
+            st.dataframe(df, use_container_width=True)
 
-            # Télécharger le CSV
-            csv = df.to_csv(index=False).encode('utf-8')
+            csv = df.to_csv(index=False).encode("utf-8")
             st.download_button(
-                label="📥 Télécharger les résultats en CSV",
-                data=csv,
-                file_name='emails.csv',
-                mime='text/csv'
+                "📥 Télécharger en CSV",
+                csv,
+                "emails.csv",
+                "text/csv"
             )
 
-            # Incrémenter le compteur avec le nombre de sites analysés
             increment_counter(sheet, nb_sites)
         else:
             st.warning("Aucun email trouvé.")
-
-
