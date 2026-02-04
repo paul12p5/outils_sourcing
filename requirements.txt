@@ -1,6 +1,14 @@
 streamlit
 googlesearch-python
-beautifulsoup4
 requests
 gspread
 oauth2client
+streamlit
+requests
+beautifulsoup4
+pandas
+gspread
+google-auth
+duckduckgo-search
+
+
